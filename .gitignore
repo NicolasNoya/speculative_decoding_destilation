@@ -20,3 +20,10 @@ Gemfile.lock
 
 # Virtual Environments
 /.venv
+
+#Security
+token.yaml
+
+
+# Model 
+model
