@@ -22,5 +22,3 @@ def sinusoidal_positional_embeddings(seq_length, dim):
     embeddings[:, 1::2] = torch.cos(positions/denominators) 
 
     return embeddings
-
-print(sinusoidal_positional_embeddings(8,4))
