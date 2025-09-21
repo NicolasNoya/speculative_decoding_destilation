@@ -136,3 +136,21 @@ custom_gen(prompt)
 #%%
 generated_ids = tokenizer(prompt, return_tensors="pt").to(model.device)
 print(dict(generated_ids))
+#%%
+
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+# Prompt: ask for a Python class definition
+model_name = "codellama/CodeLlama-7b-hf"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+prompt = """# Write a Python class called Human with attributes name and surname
+class Human:
+"""
+
+# Tokenize
+inputs = tokenizer(prompt, return_tensors="pt")
+
+ith_elem_tokens = dict(tokenizer(prompt, return_tensors="pt"))["input_ids"][0]
+ith_elem_tokens[2:5]
+
+#%%
+print("EOS token:", tokenizer.eos_token)
