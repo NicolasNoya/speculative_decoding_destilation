@@ -9,7 +9,7 @@ with open('/home/onyxia/work/token.yaml', 'r') as file:
 
 class CodeLlama:
     def __init__(self, 
-        model_name = "codellama/CodeLlama-7b-hf", 
+        model_name = "codellama/CodeLlama-7b-Python-hf", 
         quantization=True, 
         ch_dir="/home/onyxia/work/speculative_decoding_destilation/model"
     ):
@@ -18,9 +18,9 @@ class CodeLlama:
         quantization_config = None
         if quantization:
             quantization_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-                llm_int8_threshold=6.0,
-                llm_int8_has_fp16_weight=False
+                load_in_4bit=True,
+                llm_int4_threshold=6.0,
+                llm_int4_has_fp16_weight=False
             )
 
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -30,6 +30,7 @@ class CodeLlama:
             quantization_config=quantization_config,
             dtype=torch.float16
         )
+        self.model.eval()
 
 
     def custom_generate(self, prompt, max_new_tokens=100, temperature=0.01, top_p=1):
@@ -49,7 +50,7 @@ class CodeLlama:
         return output_str
 
 
-    def get_next_logits_prompt(self, prompt):
+    def get_logits_prompt(self, prompt):
         """
         This function takes a text prompt as input and returns the logits for the next token prediction.
         
@@ -61,11 +62,11 @@ class CodeLlama:
         generated_ids = dict(self.tokenizer(prompt, return_tensors="pt").to(self.model.device))["input_ids"]
         with torch.no_grad():
             outputs = self.model(input_ids=generated_ids, output_attentions=True, temperature=0)
-        next_token_logits = outputs.logits[:, -1, :]
-        return next_token_logits
+        token_logits = outputs.logits
+        return token_logits
     
 
-    def get_next_logits_tensor(self, indexes):
+    def get_logits_index(self, indexes):
         """
         This function takes a tensor of token indexes as input and returns the logits for the next token prediction.
 
@@ -76,8 +77,8 @@ class CodeLlama:
         """
         with torch.no_grad():
             outputs = self.model(input_ids=indexes, output_attentions=True, temperature=0)
-        next_token_logits = outputs.logits[:, -1, :]
-        return next_token_logits
+        token_logits = outputs.logits
+        return token_logits
     
 
     def return_last_n_logits(self, prompt, n):
