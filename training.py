@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam, SGD
+import torch.multiprocessing as mp
 
 from loss.customloss import CustomLoss
 from dataset.dataset import CodeDataset
@@ -17,28 +18,32 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Trainer:
     def __init__(
-                    self, 
-                    student_model=StudentModel(),
-                    tutor_model=CodeLlama(), 
-                    dataset=CodeDataset(), 
-                    criterion=CustomLoss(),  
+                    self,
+                    student_model,
+                    tutor_model,
+                    dataset,
                     validation_split=0.2,
                     epochs=2,
-                    num_workers=1,
-                    batch_size=3,
+                    num_workers=7,
+                    batch_size=4,
                     check_dir="/home/onyxia/work/checkpoint_dir",
-                    log_dir='/home/onyxia/work/log_dir',
-                    loss_temperature = 2,
+                    log_dir='/home/onyxia/work/speculative_decoding_destilation/log_dir',
+                    loss_temperature=2,
                 ):
+        # Logging
+        self.writer = SummaryWriter(log_dir=log_dir)
+        self.best_val_loss = float('inf')
+
         # Models adn training config
         self.student_model = student_model.to(device)
         self.tutor_model = tutor_model
-        self.optimizer = SGD(self.student_model.parameters(), lr=1e-5, weight_decay=0.05) # Not optimal but what I can afford
-        self.loss = CustomLoss()
+        self.optimizer = SGD(self.student_model.parameters(), lr=1e-5) # Not optimal but what I can afford
+        self.loss = CustomLoss(self.writer)
         self.device = device
         self.student_model.train()
         self.epochs = epochs
         self.loss_temp = loss_temperature
+        self.tokenizer = self.tutor_model.tokenizer
         
         # Dataset and Dataloaders
         self.validation_split = validation_split
@@ -48,53 +53,62 @@ class Trainer:
         len_train = int(len(self.dataset) * (1 - self.validation_split))
         len_val = len(self.dataset) - len_train
         self.train_dataset, self.val_dataset = torch.utils.data.random_split(
-            self.dataset, 
+            self.dataset,
             [len_train, len_val],
         )
         self.train_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
         self.val_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
 
-        
-
-        # Logging
-        self.writer = SummaryWriter(log_dir=log_dir)
-        self.best_val_loss = float('inf')
-        
         # Create checkpoint directory
         self.check_dir = check_dir
 
     
     def train(self):
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.amp.GradScaler('cuda')
+        actual_iter = 0
         for epoch in range(self.epochs):
-            total_loss = 0.0
-            for i, tokens_xy in enumerate(tqdm(self.train_dataloader, desc=f"Training Epoch {epoch + 1}/{self.epochs} ")):
-                x, y = tokens_xy
-                x=x.to(self.device)
-                y=y.to(self.device)
+            for _ in tqdm(range(0, self.dataset.data_size*self.dataset.cache_size, self.dataset.cache_size), desc=f"Training Epoch {epoch + 1}/{self.epochs} "):
+                total_loss = 0.0
+                for i, tokens_xy in enumerate(self.train_dataloader):
+                    x, y = tokens_xy
+                    x = x.to(self.device)
+                    y = y.to(self.device)
 
-                # Forward pass
-                student_logits = self.student_model(x)
-                with torch.no_grad():
-                    tutor_logits = self.tutor_model.get_logits_index(x)
-                self.tutor_model.model.eval()
-                # Loss
-                loss = self.loss(student_logits, tutor_logits, y, self.loss_temp)
-                self.optimizer.zero_grad(set_to_none=True)
-                scaler.scale(loss).backward()
-                scaler.step(self.optimizer)
-                scaler.update()
-                
-                total_loss += loss.item()
-                print(loss)
-                # if counter > 2:
-                #     break
-                self.optimizer.zero_grad(set_to_none=True)
-                # del loss, x, y, student_logits, tutor_logits, tokens_xy
-                # torch.cuda.empty_cache()
+                    # Forward pass
+                    student_logits = self.student_model(x)
+                    with torch.no_grad():
+                        tutor_logits = self.tutor_model.get_logits_index(x)
+
+                    if actual_iter % 500 == 0:  # log periodically
+                        sample_input = self.tokenizer.decode(x[0])
+                        sample_output = self.tokenizer.decode(student_logits[0].argmax(dim=-1))
+                        teacher_output = self.tokenizer.decode(tutor_logits[0].argmax(dim=-1))
+
+                        self.writer.add_text("samples/input", sample_input, i)
+                        self.writer.add_text("samples/student_output", sample_output, i)
+                        self.writer.add_text("samples/teacher_output", teacher_output, i)
+
+                    # Loss
+                    loss = self.loss(student_logits, tutor_logits, y, self.loss_temp, actual_iter)
+                    self.optimizer.zero_grad(set_to_none=True)
+                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                    
+                    total_loss += loss.item()
+                    del loss, x, y, student_logits, tutor_logits, tokens_xy
+                    torch.cuda.empty_cache()
+                    actual_iter += 1
+                self.dataset.cache_data()
 
 
+student_model = StudentModel()
+tutor_model = CodeLlama()
+dataset = CodeDataset()
 
-trainer = Trainer()
-#%%
-trainer.train()
+def main():
+    trainer = Trainer(student_model=student_model, tutor_model=tutor_model, dataset=dataset)
+    trainer.train()
+
+if __name__ == "__main__":
+    main()
