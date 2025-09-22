@@ -7,7 +7,7 @@ with open('/home/onyxia/work/token.yaml', 'r') as file:
     tokens = yaml.safe_load(file)
 
 
-class CodeLlama:
+class CodeLlama():
     def __init__(self, 
         model_name = "codellama/CodeLlama-7b-Python-hf", 
         quantization=True, 
@@ -28,10 +28,12 @@ class CodeLlama:
             cache_dir=ch_dir,
             device_map="auto",
             quantization_config=quantization_config,
-            dtype=torch.float16
-        )
+            dtype=torch.float16,
+            attn_implementation="eager"
+            )
         self.model.eval()
-
+        for param in self.model.parameters():
+            param.requires_grad = False
 
     def custom_generate(self, prompt, max_new_tokens=100, temperature=0.01, top_p=1):
         output_str = prompt
@@ -59,7 +61,7 @@ class CodeLlama:
         Returns:
             torch.Tensor: The logits for the next token prediction.
         """
-        generated_ids = dict(self.tokenizer(prompt, return_tensors="pt").to(self.model.device))["input_ids"]
+        generated_ids = dict(self.tokenizer(prompt, return_tensors="pt"))["input_ids"]
         with torch.no_grad():
             outputs = self.model(input_ids=generated_ids, output_attentions=True, temperature=0)
         token_logits = outputs.logits
@@ -91,8 +93,9 @@ class CodeLlama:
         Returns:
             torch.Tensor: The logits for the last n tokens.
         """
-        generated_ids = dict(self.tokenizer(prompt, return_tensors="pt").to(self.model.device))["input_ids"]
+        generated_ids = dict(self.tokenizer(prompt, return_tensors="pt"))["input_ids"]
         with torch.no_grad():
             outputs = self.model(input_ids=generated_ids, output_attentions=True, temperature=0)
         last_n_logits = [outputs.logits[:, -i:, :] for i in range(1, n+1)]
         return torch.cat(last_n_logits, dim=1)
+
