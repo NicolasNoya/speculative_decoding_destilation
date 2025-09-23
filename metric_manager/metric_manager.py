@@ -3,11 +3,13 @@ from torchmetrics.aggregation import MeanMetric
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 class MetricManager:
     """
     A class to manage and compute various evaluation metrics for model performance.
-    This class uses PyTorch's torchmetrics library to compute accuracy, F1 score, precision, and recall. 
+    This class uses PyTorch's torchmetrics library to compute accuracy, F1 score, precision, and recall.
     """
+
     def __init__(self):
         """
         Initializes the MetricManager with the required metrics.
@@ -43,7 +45,7 @@ class MetricManager:
             "kd_loss": self.kd_loss.compute().item(),
             "perplexity": self.perplexity.compute().item(),
         }
-    
+
     def reset_metrics(self):
         """
         Resets the metrics to their initial state.
