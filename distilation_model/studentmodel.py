@@ -1,8 +1,10 @@
 import yaml
 import torch
+import math
 from huggingface_hub import login
 from transformers import AutoTokenizer, AutoConfig
 from utils.utils import sinusoidal_positional_embeddings
+
 
 config_file = '/home/onyxia/work/token.yaml'
 with open(config_file, 'r') as file:
@@ -10,48 +12,84 @@ with open(config_file, 'r') as file:
 login(token=tokens['huggingface'])
  
 
+class MultiHeadedAttention(torch.nn.Module):
+    """
+    This class implements the multi-headed attention mechanism in parallel.
+    """
+    def __init__(self, embedding_dim, num_heads, dropout=0.1):
+        super(MultiHeadedAttention, self).__init__()
+        
+        self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
+        self.ffn_dim = embedding_dim * num_heads
+        self.head_dim = embedding_dim
+        self.scale = math.sqrt(self.head_dim)
+        
+        # Single linear layers for all heads combined
+        self.q_linear = torch.nn.Linear(embedding_dim, self.ffn_dim, bias = False)
+        self.k_linear = torch.nn.Linear(embedding_dim, self.ffn_dim, bias = False)
+        self.v_linear = torch.nn.Linear(embedding_dim, self.ffn_dim, bias = False)
+        self.out_linear = torch.nn.Linear(self.ffn_dim, embedding_dim, bias = False)
+        
+        self.dropout = torch.nn.Dropout(dropout)
+    
+    # x -> Batch_size, seq_len, embedding_dim
+    # attn_mask is a triangular inferior matrix of ones.
+    def forward(self, x, attn_mask=None):
+        batch_size, seq_length, _ = x.size()
+        
+        # Linear projections batch_size, num_heads, seq_length, head_dim
+        q = self.q_linear(x).view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1,2)
+        k = self.k_linear(x).view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1,2)
+        v = self.v_linear(x).view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1,2)
+        
+        # Scaled dot-product attention
+        attn_scores = torch.matmul(q, k.transpose(2,3)) / self.scale  # (batch_size, num_heads, seq_length, seq_length)
+        
+        if attn_mask is not None:
+            attn_scores = attn_scores.masked_fill(attn_mask == 0, float('-inf'))
+        
+        attn_weights = torch.nn.functional.softmax(attn_scores, dim=-1)  # (batch_size, num_heads, seq_length, seq_length)
+        attn_weights = self.dropout(attn_weights)
+        
+        attn_output = torch.matmul(attn_weights, v)  # (batch_size, num_heads, seq_length, head_dim)
+        
+        # Concatenate heads and put through final linear layer
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_length, self.embedding_dim * self.num_heads)
+        output = self.out_linear(attn_output)
+        
+        return output        
+
+
 
 class DecoderBlock(torch.nn.Module):
     def __init__(self, embedding_dim, num_heads, ffn_dim, dropout=0.1):
         super(DecoderBlock, self).__init__()
-        self.multihead_attention = torch.nn.MultiheadAttention(embedding_dim, 
-                                                                num_heads, 
-                                                                dropout=dropout, 
-                                                                batch_first=True
-                                                            )
+        # Probably less efficient than torchs implementation but more didactic
+        self.multihead_attention = MultiHeadedAttention(embedding_dim, num_heads, dropout)
+
         self.layer_norm1 = torch.nn.LayerNorm(embedding_dim)
-        self.k = torch.nn.Linear(embedding_dim, embedding_dim)
-        self.q = torch.nn.Linear(embedding_dim, embedding_dim)
-        self.v = torch.nn.Linear(embedding_dim, embedding_dim)
         self.ffn = torch.nn.Sequential(
             torch.nn.Linear(embedding_dim, ffn_dim),
-            torch.nn.ReLU(),
+            torch.nn.GELU(),
             torch.nn.Linear(ffn_dim, embedding_dim)
         )
         self.layer_norm2 = torch.nn.LayerNorm(embedding_dim)
-        self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x, attn_mask=None):
-        # Multi-head self-attention
-        input = x
         # for unbatched input, (L,N,Eq)
-        x = self.layer_norm1(x)
-        k = self.k(x)
-        q = self.q(x)
-        v = self.v(x)
-        attn_output, _ = self.multihead_attention(k, q, v, attn_mask=attn_mask)
-        x = self.layer_norm1(input + self.dropout(attn_output))
-        x = x + self.dropout(self.ffn(x))
+        x = x + self.multihead_attention(self.layer_norm1(x))
+        x = x + self.ffn(self.layer_norm2(x))
         return x
 
-# Credits: This arquitecture is based in the GPT2 architecture
 class StudentModel(torch.nn.Module):
     def __init__(
                 self,
                 model_name = "codellama/CodeLlama-7b-Python-hf", 
                 max_seq_length=2048, 
                 decoders=4, 
-                num_attention_heads=4
+                num_attention_heads=4,
+                n_layer = 4,
             ):
         super(StudentModel, self).__init__()
         # Configuration
@@ -66,15 +104,16 @@ class StudentModel(torch.nn.Module):
         # Model's Definition
         self.embedding_layer = torch.nn.Embedding(self.num_tokens, 
                                                   self.embedding_dim)
-        self.position_embedding_layer = sinusoidal_positional_embeddings(
-                                                                        self.max_seq_length, 
-                                                                        self.embedding_dim
-                                                                        )
-        self.layer_norm = torch.nn.LayerNorm(self.embedding_dim)
+        position_embedding_layer = sinusoidal_positional_embeddings(
+                                                                    self.max_seq_length, 
+                                                                    self.embedding_dim
+                                                                    )
+        self.register_buffer('position_embedding_layer', position_embedding_layer) # To avoid training them
         self.decoder_blocks = torch.nn.ModuleList(
-            [DecoderBlock(self.embedding_dim, self.num_attention_heads, self.embedding_dim) for _ in range(4)]
+            [DecoderBlock(self.embedding_dim, self.num_attention_heads, self.embedding_dim) for _ in range(n_layer)]
           )
-        self.token_logits = torch.nn.Linear(self.embedding_dim, self.num_tokens)
+        self.layer_norm = torch.nn.LayerNorm(self.embedding_dim)
+        self.token_logits = torch.nn.Linear(self.embedding_dim, self.num_tokens, bias=False)
     
     def forward(self, input_ids):
         """
@@ -85,7 +124,6 @@ class StudentModel(torch.nn.Module):
         Returns:
             torch.Tensor: Logits for the next token prediction of shape (batch_size, seq_length
         """
-        #TODO: Attention mask in the student model for the decoder blocks
         batch_size, seq_length = input_ids.size()
         if seq_length > self.max_seq_length:
             raise ValueError(f"Sequence length {seq_length} exceeds maximum length {self.max_seq_length}")
@@ -100,4 +138,3 @@ class StudentModel(torch.nn.Module):
             x = decoder(x, attn_mask)
         logits = self.token_logits(x)
         return logits
-

@@ -1,4 +1,3 @@
-#%%
 from huggingface_hub import login
 from transformers import AutoTokenizer
 from datasets import load_dataset
