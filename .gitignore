@@ -24,9 +24,11 @@ Gemfile.lock
 #Security
 token.yaml
 
-
 # Model 
 model
 
 # Profiler
 log_dir
+
+# Project Config
+pyproject.toml
