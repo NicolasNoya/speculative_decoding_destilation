@@ -31,5 +31,9 @@ checkpoint_dir
 # Profiler
 log_dir
 
+# Training execution
+nohup.out
+
+
 # Project Config
 pyproject.toml
