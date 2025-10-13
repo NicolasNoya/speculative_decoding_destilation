@@ -60,3 +60,36 @@ print(ten)
 padded = F.pad(ten, (0,9-len(ten)))
 print(padded)
 padded[:9]
+
+#%%
+docs = load_dataset(
+    "ed001/ds-coder-instruct-v2", 
+    streaming=True, 
+    split="train"
+)
+#%%
+ith_element = list(docs.skip(13088).take(100))
+
+#%%
+count = 0
+for i in range(100):
+    prompt = ith_element[i]['output']
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    # Prompt: ask for a Python class definition
+    model_name = "codellama/CodeLlama-7b-hf"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    print(prompt)
+
+    # Tokenize
+    inputs = tokenizer(prompt, return_tensors="pt")
+
+    ith_elem_tokens = dict(tokenizer(prompt, return_tensors="pt"))["input_ids"][0]
+    # count += max(len(ith_elem_tokens), count)
+    count+=len(ith_elem_tokens)
+
+print(count/100)
+#%%
+tokenizer.decode([1,2,0,0])
+
+#%%
+tokenizer.vocab_size

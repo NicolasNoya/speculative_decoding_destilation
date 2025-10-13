@@ -37,3 +37,7 @@ nohup.out
 
 # Project Config
 pyproject.toml
+
+# Python .pyc
+*.pyc
+*.cpython*

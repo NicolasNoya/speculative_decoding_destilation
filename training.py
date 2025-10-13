@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from torch.optim import Adam, SGD
+from torch.optim import Adam, SGD, lr_scheduler
 import torch.multiprocessing as mp
 
 from loss.customloss import CustomLoss
@@ -26,11 +26,12 @@ class Trainer:
         dataset,
         validation_split=0.2,
         epochs=2,
-        num_workers=7,
-        batch_size=4,
-        check_dir="/home/onyxia/work/checkpoint_dir",
+        num_workers=4,
+        batch_size=2,
+        check_dir="/home/onyxia/work/speculative_decoding_destilation/checkpoint_dir",
         log_dir="/home/onyxia/work/speculative_decoding_destilation/log_dir",
-        loss_temperature=2,
+        loss_temperature=3,
+        optimizer=None,
     ):
         # Logging
         self.writer = SummaryWriter(log_dir=log_dir)
@@ -40,15 +41,19 @@ class Trainer:
         # Models adn training config
         self.student_model = student_model.to(device)
         self.tutor_model = tutor_model
-        self.optimizer = SGD(
-            self.student_model.parameters(), lr=1e-5
-        )  # Not optimal but what I can afford
-        self.loss = CustomLoss(self.metric_manager)
+        if optimizer is None:
+            self.optimizer = Adam(self.student_model.parameters(), lr=1e-4) # Not optimal but what I can afford
+        else:
+            self.optimizer = optimizer
+
+        self.loss = CustomLoss(self.metric_manager, 0)
         self.device = device
         self.student_model.train()
         self.epochs = epochs
         self.loss_temp = loss_temperature
         self.tokenizer = self.tutor_model.tokenizer
+        self.accumulation_step = 32
+        self.profile_step = 64
 
         # Dataset and Dataloaders
         self.validation_split = validation_split
@@ -78,9 +83,12 @@ class Trainer:
         self.check_dir = check_dir
 
     def train(self):
-        scaler = torch.amp.GradScaler("cuda")
+        scaler = torch.amp.GradScaler(
+            "cuda",
+        )
         actual_iter = 0
         for epoch in range(self.epochs):
+            self.dataset.fill_list()
             for _ in tqdm(
                 range(
                     0,
@@ -97,9 +105,9 @@ class Trainer:
                     # Forward pass
                     student_logits = self.student_model(x)
                     with torch.no_grad():
-                        tutor_logits = self.tutor_model.get_logits_index(x)
+                        tutor_logits = self.tutor_model.get_logits_index(x)                        
 
-                    if actual_iter % 100 == 0:
+                    if actual_iter % self.profile_step == 1:
                         # Log samples
                         sample_input = self.tokenizer.decode(x[0])
                         sample_output = self.tokenizer.decode(
@@ -132,7 +140,11 @@ class Trainer:
                         )
                         self.metric_manager.reset_metrics()
 
-                        if actual_iter % 1000 == 0 and actual_iter != 0:
+                        # Log GPU
+                        allocated = torch.cuda.memory_allocated() / 1024**3
+                        self.writer.add_scalar('GPU/memory_allocated_GB', allocated, actual_iter)
+
+                        if actual_iter % 500 == 1:
                             # Save model checkpoint and optimizer state
                             checkpoint_path = f"{self.check_dir}/student_model_iter_{actual_iter}_loss_{means_dict['loss']}.pth"
                             torch.save(
@@ -147,12 +159,24 @@ class Trainer:
                             # Not using validation since the model only sees the data once.
 
                     # Loss
-                    loss = self.loss(student_logits, tutor_logits, y, self.loss_temp)
-                    self.optimizer.zero_grad(set_to_none=True)
+                    loss = self.loss(student_logits, tutor_logits, y, self.loss_temp) / self.accumulation_step
                     scaler.scale(loss).backward()
-                    scaler.step(self.optimizer)
-                    scaler.update()
 
+                    if actual_iter % self.accumulation_step == 0:
+                        scaler.unscale_(self.optimizer)
+                        grad_norm_before = torch.nn.utils.clip_grad_norm_(
+                            self.student_model.parameters(), 
+                            max_norm=float('inf')  # No actual clipping
+                        )
+                        # Log it
+                        self.writer.add_scalar('Gradients/norm_before_clip', grad_norm_before, actual_iter)
+                        torch.nn.utils.clip_grad_norm_(self.student_model.parameters(), max_norm=1)
+                        scaler.step(self.optimizer)
+                        scaler.update()
+                        self.optimizer.zero_grad(set_to_none=True)
+
+
+                    # clean the vRAM
                     del loss, x, y, student_logits, tutor_logits, tokens_xy
                     torch.cuda.empty_cache()
                     actual_iter += 1
@@ -161,6 +185,8 @@ class Trainer:
 
 def main():
     student_model = StudentModel()
+    total_params = sum(p.numel() for p in student_model.parameters())
+    print(f"Total parameters: {total_params:,}")
     tutor_model = CodeLlama()
     dataset = CodeDataset()
     trainer = Trainer(
