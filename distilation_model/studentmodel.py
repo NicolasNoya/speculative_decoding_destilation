@@ -1,3 +1,4 @@
+#%%
 import yaml
 import torch
 import math
@@ -63,6 +64,8 @@ class MultiHeadedAttention(torch.nn.Module):
 
         if attn_mask is not None:
             attn_scores = attn_scores.masked_fill(attn_mask == 0, float("-inf"))
+        else:
+            print("NOT ATTENTION MASK")
 
         attn_weights = torch.nn.functional.softmax(
             attn_scores, dim=-1
@@ -80,7 +83,7 @@ class MultiHeadedAttention(torch.nn.Module):
             .view(batch_size, seq_length, self.embedding_dim * self.num_heads)
         )
         output = self.out_linear(attn_output)
-
+        output = self.dropout(output)
         return output
 
 
@@ -96,25 +99,29 @@ class DecoderBlock(torch.nn.Module):
         self.ffn = torch.nn.Sequential(
             torch.nn.Linear(embedding_dim, ffn_dim),
             torch.nn.GELU(),
+            torch.nn.Dropout(dropout),
             torch.nn.Linear(ffn_dim, embedding_dim),
         )
         self.layer_norm2 = torch.nn.LayerNorm(embedding_dim)
+        self.dropout1 = torch.nn.Dropout(dropout)
+        self.dropout2 = torch.nn.Dropout(dropout)
 
     def forward(self, x, attn_mask=None):
         # for unbatched input, (L,N,Eq)
-        x = x + self.multihead_attention(self.layer_norm1(x))
-        x = x + self.ffn(self.layer_norm2(x))
+        attn_out = self.multihead_attention(self.layer_norm1(x), attn_mask)
+        x = x + self.dropout1(attn_out)
+        ffn_out = self.ffn(self.layer_norm2(x))
+        x = x + self.dropout2(ffn_out)
         return x
-
 
 class StudentModel(torch.nn.Module):
     def __init__(
         self,
         model_name="codellama/CodeLlama-7b-Python-hf",
         max_seq_length=2048,
-        decoders=4,
-        num_attention_heads=4,
-        n_layer=4,
+        num_attention_heads=6,
+        hidden_size=768,
+        n_layer=6,
     ):
         super(StudentModel, self).__init__()
         # Configuration
@@ -122,7 +129,7 @@ class StudentModel(torch.nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.num_tokens = self.tokenizer.vocab_size
         self.config = AutoConfig.from_pretrained(self.model_name)
-        self.embedding_dim = self.config.hidden_size
+        self.embedding_dim = hidden_size
         self.num_attention_heads = num_attention_heads
         self.max_seq_length = max_seq_length
 
@@ -175,8 +182,13 @@ class StudentModel(torch.nn.Module):
         x = (
             token_embeddings + position_embeddings
         )  # (batch_size, seq_length, embedding_dim)
-        attn_mask = torch.triu(torch.ones(seq_length, seq_length)).to("cuda:0")
+        # attn_mask = torch.triu(torch.ones(seq_length, seq_length)).to("cuda:0")
+        attn_mask = torch.tril(torch.ones(seq_length, seq_length)).to("cuda:0")
         for decoder in self.decoder_blocks:
             x = decoder(x, attn_mask)
         logits = self.token_logits(x)
         return logits
+
+#%%
+config = AutoConfig.from_pretrained("codellama/CodeLlama-7b-Python-hf")
+print(config.hidden_size)
