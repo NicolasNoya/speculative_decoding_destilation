@@ -14,10 +14,10 @@ class MetricManager:
         """
         Initializes the MetricManager with the required metrics.
         """
-        self.loss = MeanMetric().to(device)
-        self.ce_loss = MeanMetric().to(device)
-        self.kd_loss = MeanMetric().to(device)
-        self.perplexity = MeanMetric().to(device)
+        self.loss = MeanMetric()
+        self.ce_loss = MeanMetric()
+        self.kd_loss = MeanMetric()
+        self.perplexity = MeanMetric()
 
     def update_metrics(self, loss, ce_loss, kd_loss):
         """
@@ -28,6 +28,9 @@ class MetricManager:
         Returns:
             dict: Dictionary containing accuracy, F1 score, precision, and recall.
         """
+        loss = loss.to("cpu")
+        kd_loss = kd_loss.to("cpu")
+        ce_loss = ce_loss.to("cpu")
         self.loss.update(loss)
         self.ce_loss.update(ce_loss)
         self.kd_loss.update(kd_loss)

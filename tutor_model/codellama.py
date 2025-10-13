@@ -19,9 +19,9 @@ class CodeLlama:
         quantization_config = None
         if quantization:
             quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                llm_int4_threshold=6.0,
-                llm_int4_has_fp16_weight=False,
+                load_in_8bit=True,
+                llm_int8_threshold=6.0,
+                llm_int8_has_fp16_weight=False,
             )
 
         self.model = AutoModelForCausalLM.from_pretrained(

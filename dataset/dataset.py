@@ -8,6 +8,12 @@ import random
 from torch.utils.data import Dataset
 from torch.nn import functional as F
 from tqdm import tqdm
+from enum import Enum
+
+
+class DatasetSources(Enum):
+    coder_instruction = "ed001/ds-coder-instruct-v2"
+    bigcode = "bigcode/the-stack"
 
 
 # HuggingFace login
@@ -28,20 +34,33 @@ def is_valid_doc(x):
 class CodeDataset(Dataset):
     def __init__(
         self,
-        cache_size=32,
-        block_size=320,
+        cache_size=128,
+        block_size=400,
         model_name="codellama/CodeLlama-7b-Python-hf",
+        dataset_name: DatasetSources = DatasetSources.coder_instruction.value,
     ):
         """
         This class will dowload the data from the dataset bigcode/the-stack
         and will manage it in order to get it ready for the training of the
         student model.
         """
-        docs = load_dataset(
-            "DaniilOr/humanized_cleaned_code", streaming=True, split="train"
-        )
-        self.data_set = docs.filter(is_valid_doc)
-        self.data_size = int((124782 - 2) / cache_size)
+        self.dataset_name = dataset_name
+        if self.dataset_name == DatasetSources.coder_instruction.value:
+            docs = load_dataset(
+                "ed001/ds-coder-instruct-v2", streaming=True, split="train"
+            )
+            self.data_size = int((17200 - 2) / cache_size)  # 17200 DATASET size
+
+        elif self.dataset_name == DatasetSources.bigcode.value:
+            docs = load_dataset(
+                "bigcode/the-stack",
+                data_dir="data/python",
+                streaming=True,
+                split="train",
+            ).filter(is_valid_doc)
+            self.data_size = int((1e6 - 2) / cache_size)  # 1e6 DATASET size
+
+        self.data_set = docs
         self.python_list = list(range(int(self.data_size)))
         random.shuffle(self.python_list)
         self.block_size = block_size
@@ -75,17 +94,40 @@ class CodeDataset(Dataset):
             # Convert elem in a tensor of indexes via tokenization
             if counter == 0:
                 counter += 1
-            code = elem["cleaned_generated_code"]
-            instructions = elem["original_docstring"]
-            if instructions is None:
-                continue
-            character_string = "# Instructions: " + instructions + "\n\n# Code: " + code
+            if self.dataset_name == DatasetSources.coder_instruction.value:
+                code = elem["output"]
+                instructions = elem["instruction"]
+            elif self.dataset_name == DatasetSources.bigcode.value:
+                # In big code we don't have instructions
+                code = elem["content"]
+                instructions = ""
+
+            character_string = (
+                "# Instructions: " + instructions + "\n\n# <Code>: " + code
+            )
             tokens = dict(self.tokenizer(character_string, return_tensors="pt"))[
                 "input_ids"
             ][0]
+
             # We start from the first element, since we want our model to perform good in instructions
-            x = tokens[: self.block_size]
-            y = tokens[1 : self.block_size + 1]
+            x = tokens[: self.block_size - 2]
+            y = tokens[1 : self.block_size - 1]
+
+            # Filter corrupted data
+            if len(character_string) < 150:
+                continue
+            if torch.isnan(x).any() or torch.isinf(x).any():
+                print("WARNING: Bad data")
+                continue  # Skip this batch
+            if (x < 0).any() or (x >= self.tokenizer.vocab_size).any():
+                print("WARNING: Invalid targets")
+                continue
+
+            # Add first and last element
+            start_element = torch.tensor([1])
+            end_element = torch.tensor([2])
+            x = torch.cat([torch.cat([start_element, x]), end_element])
+            y = torch.cat([torch.cat([start_element, y]), end_element])
 
             # Padding with 0 until the end
             if len(x) < self.block_size:
