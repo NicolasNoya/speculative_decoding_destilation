@@ -52,3 +52,7 @@ print(outputs)
 # %%
 aux = [[4, 5, 6], [1, 2, 3]]
 print(aux[0][1:])
+# %%
+aux = [1, 2, 3, 4, 9, 0, 5, 6, 7, 8]
+aux.sort()
+print(aux)

@@ -1,4 +1,4 @@
-#%%
+# %%
 import yaml
 import torch
 import math
@@ -114,14 +114,15 @@ class DecoderBlock(torch.nn.Module):
         x = x + self.dropout2(ffn_out)
         return x
 
+
 class StudentModel(torch.nn.Module):
     def __init__(
         self,
         model_name="codellama/CodeLlama-7b-Python-hf",
         max_seq_length=2048,
-        num_attention_heads=6,
+        num_attention_heads=8,
         hidden_size=768,
-        n_layer=6,
+        n_layer=8,
     ):
         super(StudentModel, self).__init__()
         # Configuration
@@ -189,6 +190,7 @@ class StudentModel(torch.nn.Module):
         logits = self.token_logits(x)
         return logits
 
-#%%
+
+# %%
 config = AutoConfig.from_pretrained("codellama/CodeLlama-7b-Python-hf")
 print(config.hidden_size)
