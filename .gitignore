@@ -24,8 +24,9 @@ Gemfile.lock
 #Security
 token.yaml
 
-# Model 
+# Models
 model
+checkpoint_dir
 
 # Profiler
 log_dir
