@@ -28,7 +28,6 @@ class Trainer:
         num_workers=4,
         batch_size=8,
         learning_rate=1e-4,
-        loss_temperature=3,
         check_dir="/home/onyxia/work/speculative_decoding_destilation/checkpoint_dir",
         log_dir="/home/onyxia/work/speculative_decoding_destilation/log_dir",
         optimizer="adamw",
@@ -58,7 +57,6 @@ class Trainer:
         self.device = device
         self.student_model.train()
         self.epochs = epochs
-        self.loss_temp = loss_temperature
         self.tokenizer = self.tutor_model.tokenizer
         self.accumulation_step = accumulation_steps
         self.profile_step = profile_steps
@@ -170,7 +168,7 @@ class Trainer:
 
                         # Loss
                         loss = (
-                            self.loss(student_logits, tutor_logits, y, self.loss_temp)
+                            self.loss(student_logits, tutor_logits, y)
                             / self.accumulation_step
                         )
                         scaler.scale(loss).backward()
@@ -216,18 +214,3 @@ if __name__ == "__main__":
         student_model=student_model, tutor_model=tutor_model, **trainer_dict
     )
     trainer.train()
-
-# %%
-import yaml
-from tutor_model.codellama import CodeLlama
-from distilation_model.studentmodel import StudentModel
-
-# Use configuration file
-with open("configuration.yaml", "r") as file:
-    config = yaml.safe_load(file)
-config.keys()
-std = StudentModel(**config["studentmodel"])
-# tutor_model = CodeLlama(**config["teachermodel"])
-tutor_model = None
-trainer_dict = config["training"]
-trainer = Trainer(student_model=student_model, tutor_model=tutor_model, **trainer_dict)
