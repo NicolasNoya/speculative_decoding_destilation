@@ -1,0 +1,52 @@
+# Dataset Configuration
+dataset:
+  cache_size: 128
+  block_size: 400
+  min_token_len: 150
+  model_name: "codellama/CodeLlama-7b-Python-hf"
+
+
+# Training Configuration
+training:
+  validation_split: 0.2
+  epochs: 1
+  num_workers: 4
+  batch_size: 8
+  learning_rate: 1e-4
+  loss_temperature: 3
+  check_dir: "/home/onyxia/work/speculative_decoding_destilation/checkpoint_dir"
+  log_dir: "/home/onyxia/work/speculative_decoding_destilation/log_dir"
+  optimizer: "adamw"
+  accumulation_steps: 32
+  profile_steps: 64
+  checkpoint_steps: 10
+  max_norm_grad: 1.0
+
+
+# Teacher Model Configuration
+teachermodel:
+  model_name: "codellama/CodeLlama-7b-Python-hf"
+  quantization: True
+  checkpoint_dir: "/home/onyxia/work/speculative_decoding_destilation/model"
+  device_map: "auto"
+  attention_implementation: "eager"
+
+
+# Student Model Configuration
+studentmodel:
+  model_name: "codellama/CodeLlama-7b-Python-hf"
+  max_seq_length: 2048
+  num_attention_heads: 8
+  hidden_size: 768
+  n_layer: 8
+  dropout: 0.1
+
+
+# Loss Configuration
+loss:
+  alpha: 0.5
+  reduction: "batchmean"
+  loss_temperature: 3
+
+# Path to HF-token file
+huggingface_token: "/home/nicolas/Desktop/finetune/speculative_decoding_destilation/token.yaml"

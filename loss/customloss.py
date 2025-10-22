@@ -12,24 +12,27 @@ class CustomLoss(nn.Module):
         self,
         metric_manager: MetricManager,
         alpha=0.5,
+        temperature=3,
+        reduction="batchmean",
         model_name="codellama/CodeLlama-7b-Python-hf",
     ):
         super(CustomLoss, self).__init__()
         self.ce = nn.CrossEntropyLoss()
-        self.kl = nn.KLDivLoss(reduction="batchmean")
+        self.kl = nn.KLDivLoss(reduction=reduction)
         self.alpha = alpha
+        self.temperature = temperature
         self.metric_manager = metric_manager
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    def forward(self, student_logits, tutor_logits, targets, temperature):
+    def forward(self, student_logits, tutor_logits, targets):
         ce_loss = torch.tensor([0])
         ce_loss = self.ce(student_logits.transpose(1, 2), targets)
 
         # Soft distillation loss
         kd_loss = self.kl(
-            input=F.log_softmax(student_logits / temperature, dim=2),
-            target=F.softmax(tutor_logits / temperature, dim=2),
-        ) * (temperature**2)
+            input=F.log_softmax(student_logits / self.temperature, dim=2),
+            target=F.softmax(tutor_logits / self.temperature, dim=2),
+        ) * (self.temperature**2)
 
         if torch.isnan(kd_loss) or torch.isinf(kd_loss):
             kd_loss = torch.tensor([0]).to(kd_loss.device)  # We ignore it
@@ -110,29 +113,4 @@ class CustomLoss(nn.Module):
             truncated_tutor_logits, max_len_logits, max_len_targets, is_logits=True
         )
 
-        # print("shapes")
-        # print(targets_tensor.shape)
-        # print(student_logits_tensor.shape)
-        # print(tutor_logits_tensor.shape)
-
         return targets_tensor, student_logits_tensor, tutor_logits_tensor
-
-
-if __name__ == "__main__":
-    batch_size = 2
-    seq_len = 128
-    vocab_size = 32000
-    temperature = 3.0
-
-    targets = torch.randint(0, vocab_size, (batch_size, seq_len))
-    student_logits = torch.randn(batch_size, seq_len, vocab_size)
-    tutor_logits = torch.randn(batch_size, seq_len, vocab_size)
-
-    # Initialize loss function
-    metric_manager = MetricManager()
-    loss_fn = CustomLoss(metric_manager, alpha=0.5)
-
-    # Forward pass
-    loss = loss_fn(student_logits, tutor_logits, targets, temperature)
-    print(f"Loss: {loss}")
-    print(f"Loss shape: {loss.shape}")

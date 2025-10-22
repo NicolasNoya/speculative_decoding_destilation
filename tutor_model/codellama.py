@@ -3,8 +3,15 @@ import yaml
 from huggingface_hub import login
 import torch
 
-with open("/home/onyxia/work/token.yaml", "r") as file:
-    tokens = yaml.safe_load(file)
+# with open("/home/onyxia/work/token.yaml", "r") as file:
+# tokens = yaml.safe_load(file)
+
+config_file = "./configuration.yaml"
+with open(config_file, "r") as file:
+    config = yaml.safe_load(file)
+with open(config["huggingface_token"], "r") as file:
+    token = yaml.safe_load(file)
+login(token=token["huggingface"])
 
 
 class CodeLlama:
@@ -12,7 +19,9 @@ class CodeLlama:
         self,
         model_name="codellama/CodeLlama-7b-Python-hf",
         quantization=True,
-        ch_dir="/home/onyxia/work/speculative_decoding_destilation/model",
+        checkpoint_dir="/home/onyxia/work/speculative_decoding_destilation/model",
+        device_map="auto",
+        attention_implementation="eager",
     ):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -26,11 +35,11 @@ class CodeLlama:
 
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            cache_dir=ch_dir,
-            device_map="auto",
+            cache_dir=checkpoint_dir,
+            device_map=device_map,
             quantization_config=quantization_config,
             dtype=torch.float16,
-            attn_implementation="eager",
+            attn_implementation=attention_implementation,
         )
         self.model.eval()
         for param in self.model.parameters():

@@ -1,4 +1,3 @@
-# %%
 import yaml
 import torch
 import math
@@ -7,10 +6,12 @@ from transformers import AutoTokenizer, AutoConfig
 from utils.utils import sinusoidal_positional_embeddings
 
 
-config_file = "/home/onyxia/work/token.yaml"
+config_file = "./configuration.yaml"
 with open(config_file, "r") as file:
-    tokens = yaml.safe_load(file)
-login(token=tokens["huggingface"])
+    config = yaml.safe_load(file)
+with open(config["huggingface_token"], "r") as file:
+    token = yaml.safe_load(file)
+login(token=token["huggingface"])
 
 
 class MultiHeadedAttention(torch.nn.Module):
@@ -123,6 +124,7 @@ class StudentModel(torch.nn.Module):
         num_attention_heads=8,
         hidden_size=768,
         n_layer=8,
+        dropout=0.1,
     ):
         super(StudentModel, self).__init__()
         # Configuration
@@ -145,7 +147,10 @@ class StudentModel(torch.nn.Module):
         self.decoder_blocks = torch.nn.ModuleList(
             [
                 DecoderBlock(
-                    self.embedding_dim, self.num_attention_heads, self.embedding_dim
+                    self.embedding_dim,
+                    self.num_attention_heads,
+                    self.embedding_dim,
+                    dropout,
                 )
                 for _ in range(n_layer)
             ]
@@ -189,8 +194,3 @@ class StudentModel(torch.nn.Module):
             x = decoder(x, attn_mask)
         logits = self.token_logits(x)
         return logits
-
-
-# %%
-config = AutoConfig.from_pretrained("codellama/CodeLlama-7b-Python-hf")
-print(config.hidden_size)
