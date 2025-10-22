@@ -1,6 +1,7 @@
 from huggingface_hub import login
 from transformers import AutoTokenizer
-from datasets import load_dataset
+
+# from datasets import load_dataset
 import yaml
 import torch
 import os
@@ -36,6 +37,7 @@ class CodeDataset(Dataset):
         self,
         cache_size=128,
         block_size=400,
+        min_token_len=150,
         model_name="codellama/CodeLlama-7b-Python-hf",
         dataset_name: DatasetSources = DatasetSources.coder_instruction.value,
     ):
@@ -45,6 +47,7 @@ class CodeDataset(Dataset):
         student model.
         """
         self.dataset_name = dataset_name
+        self.min_token_len = min_token_len
         if self.dataset_name == DatasetSources.coder_instruction.value:
             docs = load_dataset(
                 "ed001/ds-coder-instruct-v2", streaming=True, split="train"
@@ -114,7 +117,7 @@ class CodeDataset(Dataset):
             y = tokens[1 : self.block_size - 1]
 
             # Filter corrupted data
-            if len(character_string) < 150:
+            if len(character_string) < self.min_token_len:
                 continue
             if torch.isnan(x).any() or torch.isinf(x).any():
                 print("WARNING: Bad data")

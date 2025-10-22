@@ -1,3 +1,4 @@
+# %%
 from tqdm import tqdm
 
 import torch
@@ -5,6 +6,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
+import yaml
 
 from loss.customloss import CustomLoss
 from dataset.dataset import CodeDataset, DatasetSources
@@ -25,10 +27,15 @@ class Trainer:
         epochs=1,
         num_workers=4,
         batch_size=8,
+        learning_rate=1e-4,
+        loss_temperature=3,
         check_dir="/home/onyxia/work/speculative_decoding_destilation/checkpoint_dir",
         log_dir="/home/onyxia/work/speculative_decoding_destilation/log_dir",
-        loss_temperature=3,
-        optimizer=None,
+        optimizer="adamw",
+        accumulation_steps=32,
+        profile_steps=64,
+        checkpoint_steps=10,
+        max_norm_grad=1.0,
     ):
         # Logging
         self.writer = SummaryWriter(log_dir=log_dir)
@@ -38,12 +45,14 @@ class Trainer:
         # Models adn training config
         self.student_model = student_model.to(device)
         self.tutor_model = tutor_model
-        if optimizer is None:
+        if optimizer is None or optimizer == "adamw":
             self.optimizer = Adam(
-                self.student_model.parameters(), lr=1e-4
+                self.student_model.parameters(), lr=learning_rate
             )  # Not optimal but what I can afford
-        else:
-            self.optimizer = optimizer
+        elif optimizer == "sgd":
+            self.optimizer = torch.optim.SGD(
+                self.student_model.parameters(), lr=learning_rate
+            )
 
         self.loss = CustomLoss(self.metric_manager)
         self.device = device
@@ -51,32 +60,16 @@ class Trainer:
         self.epochs = epochs
         self.loss_temp = loss_temperature
         self.tokenizer = self.tutor_model.tokenizer
-        self.accumulation_step = 32
-        self.profile_step = 64
+        self.accumulation_step = accumulation_steps
+        self.profile_step = profile_steps
+        self.checkpoint_steps = checkpoint_steps
+        self.max_norm_grad = max_norm_grad
 
         # Dataset and Dataloaders
         self.validation_split = validation_split
         self.batch_size = batch_size
         self.dataset = None
         self.num_workers = num_workers
-        len_train = int(len(self.dataset) * (1 - self.validation_split))
-        len_val = len(self.dataset) - len_train
-        self.train_dataset, self.val_dataset = torch.utils.data.random_split(
-            self.dataset,
-            [len_train, len_val],
-        )
-        self.train_dataloader = DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-        )
-        self.val_dataloader = DataLoader(
-            self.val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-        )
 
         # Create checkpoint directory
         self.check_dir = check_dir
@@ -90,7 +83,9 @@ class Trainer:
             DatasetSources.bigcode.value,
             DatasetSources.coder_instruction.value,
         ]:
-            self.dataset = CodeDataset(dataset_name=dt_name)
+            dataset_dict = config["dataset"]
+            dataset_dict["dataset_name"] = dt_name
+            self.dataset = CodeDataset(**dataset_dict)
             for epoch in range(self.epochs):
                 self.dataset.fill_list()
                 for _ in tqdm(
@@ -154,7 +149,12 @@ class Trainer:
                                 "GPU/memory_allocated_GB", allocated, actual_iter
                             )
 
-                            if actual_iter % 500 == 1:
+                            # Save every 10 checkpoint iterations
+                            if (
+                                actual_iter
+                                % (self.profile_steps * self.checkpoint_steps)
+                                == 1
+                            ):
                                 # Save model checkpoint and optimizer state
                                 checkpoint_path = f"{self.check_dir}/student_model_iter_{actual_iter}_loss_{means_dict['loss']}.pth"
                                 torch.save(
@@ -188,7 +188,8 @@ class Trainer:
                                 actual_iter,
                             )
                             torch.nn.utils.clip_grad_norm_(
-                                self.student_model.parameters(), max_norm=1
+                                self.student_model.parameters(),
+                                max_norm=self.max_norm_grad,
                             )
                             scaler.step(self.optimizer)
                             scaler.update()
@@ -202,9 +203,31 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    student_model = StudentModel()
+    # Use configuration file
+    with open("configuration.yaml", "r") as file:
+        config = yaml.safe_load(file)
+
+    student_model = StudentModel(**config["studentmodel"])
     total_params = sum(p.numel() for p in student_model.parameters())
     print(f"Total parameters: {total_params:,}")
-    tutor_model = CodeLlama()
-    trainer = Trainer(student_model=student_model, tutor_model=tutor_model)
+    tutor_model = CodeLlama(**config["teachermodel"])
+    trainer_dict = config["trainer"]
+    trainer = Trainer(
+        student_model=student_model, tutor_model=tutor_model, **trainer_dict
+    )
     trainer.train()
+
+# %%
+import yaml
+from tutor_model.codellama import CodeLlama
+from distilation_model.studentmodel import StudentModel
+
+# Use configuration file
+with open("configuration.yaml", "r") as file:
+    config = yaml.safe_load(file)
+config.keys()
+std = StudentModel(**config["studentmodel"])
+# tutor_model = CodeLlama(**config["teachermodel"])
+tutor_model = None
+trainer_dict = config["training"]
+trainer = Trainer(student_model=student_model, tutor_model=tutor_model, **trainer_dict)
